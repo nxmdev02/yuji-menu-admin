@@ -1,8 +1,5 @@
 <template>
   <div class="admin-container">
-    <!-- ✅ 좌측 상단 로고 -->
-    <img src="/logo.jpg" class="corner-logo" />
-
     <div class="admin-card">
       <!-- ✅ 헤더 -->
       <div class="header">
@@ -206,7 +203,6 @@ async function login() {
 
   if (alreadyAdmin) {
     user.value = loginUser;
-    message.value = "✅ 로그인 성공";
     return;
   }
 
@@ -241,7 +237,6 @@ async function login() {
   }
 
   user.value = loginUser;
-  message.value = "✅ 로그인 성공";
 }
 
 /* ------------------------------
@@ -339,17 +334,6 @@ async function addAdmin() {
   justify-content: center;
   align-items: center;
   background: #f7f7f7;
-}
-
-/* ✅ 좌측 상단 로고 */
-.corner-logo {
-  position: fixed;
-  top: 20px;
-  left: 20px;
-  width: 150px;
-  height: auto;
-  object-fit: contain;
-  z-index: 999;
 }
 
 .admin-card {
