@@ -1,17 +1,21 @@
 <template>
   <div class="admin-container">
+
     <div class="admin-card">
       <!-- ✅ 헤더 -->
       <div class="header">
         <h2>유지커피웍스 관리자</h2>
       </div>
 
-      <!-- ✅ 로그인 -->
+      <!-- ✅ 로그인 (매직링크) -->
       <div v-if="!user" class="form-box">
         <input v-model="email" placeholder="이메일" />
-        <input v-model="password" type="password" placeholder="비밀번호" />
 
-        <button class="main-btn" @click="login">로그인</button>
+        <button class="main-btn" @click="sendMagicLink" :disabled="loading">
+          {{ loading ? "발송 중..." : "로그인 링크 보내기" }}
+        </button>
+
+        <p class="hint">메일함에서 로그인 링크를 누르면 자동 로그인됩니다.</p>
       </div>
 
       <!-- ✅ 로그인 후 -->
@@ -43,29 +47,40 @@
             <b>{{ uploadFileName }}</b>
           </p>
 
-          <!-- ✅ 현재 노출되는 메뉴 이미지 (캐시 무시 버전) -->
+          <!-- ✅ 현재 노출되는 메뉴 이미지 (새로고침 버튼 때만 캐시 버스트) -->
           <div style="text-align:center;">
             <img
               v-if="menuPreviewUrl"
               :src="menuPreviewUrl"
               alt="menu preview"
               style="width: 100%; border-radius: 10px; border: 1px solid #eee;"
+              draggable="false"
             />
           </div>
+
+          <button class="sub-btn" type="button" @click="refreshPreview" :disabled="loading">
+            이미지 새로고침
+          </button>
 
           <!-- 파일 선택 -->
           <input type="file" @change="handleFile" />
 
           <!-- 업로드 버튼 -->
-          <button class="main-btn" @click="uploadMenu" :disabled="!file">
-            메뉴 교체 업로드
+          <button class="main-btn" @click="uploadMenu" :disabled="!file || loading">
+            {{ loading ? "업로드 중..." : "메뉴 교체 업로드" }}
           </button>
         </div>
 
         <!-- ✅ 관리자 관리 탭 -->
         <div v-if="activeTab === 'admin'" class="form-box">
-          <input v-model="newAdminEmail" placeholder="추가할 관리자 이메일" />
-          <button class="main-btn" @click="addAdmin">관리자 추가</button>
+          <p class="hint" v-if="isSuperAdmin">슈퍼관리자 전용: 관리자 이메일 초대</p>
+          <p class="hint" v-else>슈퍼관리자만 관리자 추가가 가능합니다.</p>
+
+          <input v-model="newAdminEmail" placeholder="추가할 관리자 이메일" :disabled="!isSuperAdmin" />
+
+          <button class="main-btn" @click="addAdmin" :disabled="!isSuperAdmin || !newAdminEmail || loading">
+            {{ loading ? "초대 중..." : "관리자 추가(초대 메일)" }}
+          </button>
         </div>
       </div>
 
@@ -75,7 +90,7 @@
       <!-- ✅ 하단 액션 -->
       <div v-if="user" class="bottom-actions">
         <router-link to="/" class="back-link">메뉴로 돌아가기</router-link>
-        <button class="logout-btn" @click="logout">로그아웃</button>
+        <button class="logout-btn" @click="logout" :disabled="loading">로그아웃</button>
       </div>
     </div>
   </div>
@@ -86,36 +101,163 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { supabase } from "@/lib/supabase";
 
 /* ------------------------------
-   ✅ 상태
+   ✅ 상수/상태
 ------------------------------ */
+const SUPER_ADMIN_EMAIL = "nxmdev02@gmail.com";
+
 const email = ref("");
-const password = ref("");
 const user = ref(null);
 const message = ref("");
+const loading = ref(false);
+
 const activeTab = ref("menu");
 
 /* ------------------------------
-   ✅ 로그인 세션 복구 + auth 구독 (중복 등록 방지)
+   ✅ 권한 helper
+------------------------------ */
+const isSuperAdmin = computed(() => user.value?.email === SUPER_ADMIN_EMAIL);
+
+async function ensureAdminAccess(currentUser) {
+  // 0) 슈퍼관리자면 무조건 통과 + admin_users 보장
+  if (currentUser.email === SUPER_ADMIN_EMAIL) {
+    await supabase.from("admin_users").upsert({ email: currentUser.email }, { onConflict: "email" });
+    return true;
+  }
+
+  // 1) 이미 admin_users에 있으면 통과
+  const { data: adminRow, error: adminErr } = await supabase
+    .from("admin_users")
+    .select("email")
+    .eq("email", currentUser.email)
+    .maybeSingle();
+
+  if (adminErr) throw adminErr;
+  if (adminRow) return true;
+
+  // 2) admin_users 없으면: 초대 상태 확인
+  const { data: inviteRow, error: inviteErr } = await supabase
+    .from("admin_invites")
+    .select("email, status")
+    .eq("email", currentUser.email)
+    .maybeSingle();
+
+  if (inviteErr) throw inviteErr;
+
+  if (!inviteRow || inviteRow.status === "revoked") {
+    return false;
+  }
+
+  // 3) 초대된 사용자면: admin_users 등록 + invite accepted 처리
+  const { error: upsertErr } = await supabase
+    .from("admin_users")
+    .upsert({ email: currentUser.email }, { onConflict: "email" });
+
+  if (upsertErr) throw upsertErr;
+
+  await supabase.from("admin_invites").update({ status: "accepted" }).eq("email", currentUser.email);
+
+  return true;
+}
+
+/* ------------------------------
+   ✅ 세션 복구 + Auth 구독 (로그인 시 권한검증 포함)
 ------------------------------ */
 let authSub;
 
+async function handleAuthedSession(session) {
+  const u = session?.user || null;
+
+  if (!u) {
+    user.value = null;
+    return;
+  }
+
+  try {
+    const ok = await ensureAdminAccess(u);
+
+    if (!ok) {
+      message.value = "❌ 관리자 초대된 계정만 접근 가능합니다.";
+      await supabase.auth.signOut();
+      user.value = null;
+      return;
+    }
+
+    user.value = u;
+    message.value = "✅ 로그인 성공";
+
+    // 로그인 후 메뉴 프리뷰 갱신(캐시 그대로: 기본은 v=0)
+    await refreshMenuPreview(false);
+
+    // URL hash 토큰 제거(깔끔하게)
+    if (window.location.hash) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  } catch (e) {
+    message.value = "❌ 권한 확인 실패";
+    await supabase.auth.signOut();
+    user.value = null;
+  }
+}
+
 onMounted(async () => {
   const { data } = await supabase.auth.getSession();
-  user.value = data.session?.user || null;
+  await handleAuthedSession(data.session);
 
-  const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-    user.value = session?.user || null;
+  const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    await handleAuthedSession(session);
   });
 
   authSub = sub.subscription;
 });
 
-onUnmounted(() => {
-  authSub?.unsubscribe();
-});
+onUnmounted(() => authSub?.unsubscribe());
 
 /* ------------------------------
-   ✅ 메뉴 업로드 + 캐시 무시 프리뷰
+   ✅ 매직링크 로그인
+------------------------------ */
+async function sendMagicLink() {
+  message.value = "";
+
+  if (!email.value) {
+    message.value = "❌ 이메일 입력하세요.";
+    return;
+  }
+
+  loading.value = true;
+
+  const SITE_URL = import.meta.env.VITE_PUBLIC_SITE_URL || window.location.origin;
+
+  const { error } = await supabase.auth.signInWithOtp({
+    email: email.value,
+    options: {
+      emailRedirectTo: `${SITE_URL}/admin`,
+    },
+  });
+
+  loading.value = false;
+
+  if (error) {
+    message.value = "❌ 로그인 링크 발송 실패: " + error.message;
+    return;
+  }
+
+  message.value = "✅ 로그인 링크를 이메일로 보냈습니다. 메일함을 확인하세요.";
+}
+
+/* ------------------------------
+   ✅ 로그아웃
+------------------------------ */
+async function logout() {
+  loading.value = true;
+  await supabase.auth.signOut();
+  loading.value = false;
+
+  user.value = null;
+  message.value = "로그아웃되었습니다.";
+}
+
+/* ------------------------------
+   ✅ 메뉴 업로드 + 프리뷰 (새로고침 버튼 눌러야만 캐시 버스트)
 ------------------------------ */
 const file = ref(null);
 const selectedLang = ref("korean");
@@ -130,201 +272,123 @@ const fileMap = {
 const uploadFileName = computed(() => fileMap[selectedLang.value]);
 
 function handleFile(e) {
-  file.value = e.target.files[0];
+  file.value = e.target.files?.[0] || null;
 }
 
-// ✅ 현재 메뉴 이미지 URL (캐시 무시: ?v=timestamp)
+// 프리뷰 URL + 버전(기본 0, 새로고침 버튼 눌렀을 때만 갱신)
+const previewVersion = ref(0);
 const menuPreviewUrl = ref("");
 
-async function refreshMenuPreview() {
+async function refreshMenuPreview(bust = false) {
+  if (bust) previewVersion.value = Date.now();
+
   const { data } = supabase.storage.from("menu").getPublicUrl(uploadFileName.value);
   const publicUrl = data?.publicUrl;
 
-  // publicUrl이 있어도 캐시 때문에 안 바뀌니 쿼리로 무조건 bust
-  menuPreviewUrl.value = publicUrl ? `${publicUrl}?v=${Date.now()}` : "";
+  menuPreviewUrl.value = publicUrl ? `${publicUrl}?v=${previewVersion.value}` : "";
 }
 
-// 언어 바뀔 때마다 프리뷰 갱신
-const selectedLangWatcher = computed(() => selectedLang.value);
-onMounted(() => {
-  refreshMenuPreview();
-});
-
-// watch를 쓰고 싶으면 아래처럼 (현재는 computed만으로는 감지가 안되므로 watch 권장)
-import { watch } from "vue";
-watch(selectedLang, () => {
-  refreshMenuPreview();
-});
-
-/* ------------------------------
-   ✅ 로그인 (슈퍼관리자 우선 통과)
------------------------------- */
-async function login() {
-  message.value = "";
-
-  const { error } = await supabase.auth.signInWithPassword({
-    email: email.value,
-    password: password.value,
-  });
-
-  if (error) {
-    message.value = "❌ 로그인 실패: " + error.message;
-    return;
-  }
-
-  // ✅ 서버에서 유저 재조회
-  const { data: userRes, error: userErr } = await supabase.auth.getUser();
-  const loginUser = userRes?.user;
-
-  if (userErr || !loginUser) {
-    message.value = "❌ 유저 정보 조회 실패";
-    await supabase.auth.signOut();
-    return;
-  }
-
-  if (!loginUser.email_confirmed_at) {
-    message.value = "❌ 이메일 인증 후 로그인 가능합니다.";
-    await supabase.auth.signOut();
-    return;
-  }
-
-  // ✅ 이미 admin_users에 있으면 바로 통과 (슈퍼관리자)
-  const { data: alreadyAdmin, error: adminCheckErr } = await supabase
-    .from("admin_users")
-    .select("email")
-    .eq("email", loginUser.email)
-    .maybeSingle();
-
-  if (adminCheckErr) {
-    message.value = "❌ 관리자 확인 실패: " + adminCheckErr.message;
-    await supabase.auth.signOut();
-    return;
-  }
-
-  if (alreadyAdmin) {
-    user.value = loginUser;
-    return;
-  }
-
-  // ✅ admin_users에 없으면 초대 여부 확인
-  const { data: inviteData, error: inviteErr } = await supabase
-    .from("admin_invites")
-    .select("email, status")
-    .eq("email", loginUser.email)
-    .maybeSingle();
-
-  if (inviteErr) {
-    message.value = "❌ 초대 정보 조회 실패: " + inviteErr.message;
-    await supabase.auth.signOut();
-    return;
-  }
-
-  if (!inviteData || inviteData.status === "revoked") {
-    message.value = "❌ 관리자 초대된 계정만 접근 가능합니다.";
-    await supabase.auth.signOut();
-    return;
-  }
-
-  // ✅ 초대된 사람이면 admin_users 등록
-  const { error: upsertErr } = await supabase
-    .from("admin_users")
-    .upsert({ email: loginUser.email }, { onConflict: "email" });
-
-  if (upsertErr) {
-    message.value = "❌ 관리자 등록 실패: " + upsertErr.message;
-    await supabase.auth.signOut();
-    return;
-  }
-
-  user.value = loginUser;
+// 언어 바꾸면 "같은 v"로만 갱신(캐시 버스트는 새로고침 버튼에서만)
+async function onChangeLang() {
+  await refreshMenuPreview(false);
 }
 
-/* ------------------------------
-   ✅ 로그아웃
------------------------------- */
-async function logout() {
-  await supabase.auth.signOut();
-  user.value = null;
+async function refreshPreview() {
+  await refreshMenuPreview(true);
 }
 
-/* ------------------------------
-   ✅ 업로드 (cacheControl: "0" + 업로드 후 프리뷰 강제 갱신)
------------------------------- */
 async function uploadMenu() {
   if (!file.value) return;
 
-  if (!file.value.type.startsWith("image/")) {
+  if (!file.value.type?.startsWith("image/")) {
     message.value = "❌ 이미지 파일만 업로드 가능합니다.";
     return;
   }
 
+  loading.value = true;
   message.value = "업로드 중...";
 
-  const { error } = await supabase.storage
-    .from("menu")
-    .upload(uploadFileName.value, file.value, {
-      upsert: true,
-      cacheControl: "0", // 🔥 캐시 최소화
-    });
+  const { error } = await supabase.storage.from("menu").upload(uploadFileName.value, file.value, {
+    upsert: true,
+    cacheControl: "0",
+  });
+
+  loading.value = false;
 
   if (error) {
     message.value = "❌ 업로드 실패: " + error.message;
     return;
   }
 
-  message.value = "✅ 업로드 성공!";
+  message.value = "✅ 업로드 성공! (이미지 새로고침 버튼을 누르면 최신으로 보입니다)";
   file.value = null;
-
-  // ✅ 업로드 후 프리뷰 즉시 갱신 (캐시 bust)
-  await refreshMenuPreview();
 }
 
+/* selectedLang 변화 감지: watch 없이도 간단히 */
+const _origSetter = selectedLang.value;
+Object.defineProperty(selectedLang, "value", {
+  get() {
+    return _origSetter;
+  },
+  set(v) {
+    // eslint-disable-next-line no-param-reassign
+    selectedLang._value = v;
+    onChangeLang();
+  },
+});
+
 /* ------------------------------
-   ✅ 관리자 추가 (배포/로컬 자동 분기 추천)
+   ✅ 관리자 추가(초대): 슈퍼관리자만
 ------------------------------ */
 const newAdminEmail = ref("");
 
 async function addAdmin() {
+  if (!user.value?.email || user.value.email !== SUPER_ADMIN_EMAIL) {
+    message.value = "❌ 슈퍼관리자만 관리자 추가가 가능합니다.";
+    return;
+  }
+
   if (!newAdminEmail.value) {
     message.value = "❌ 이메일 입력하세요.";
     return;
   }
 
+  loading.value = true;
   message.value = "초대 메일 발송 중...";
 
-  const SITE_URL = import.meta.env.VITE_PUBLIC_SITE_URL || window.location.origin;
-
-  // 🔥 비밀번호 설정 메일 발송
-  const { error } = await supabase.auth.resetPasswordForEmail(
-    newAdminEmail.value,
-    {
-      redirectTo: `${SITE_URL}/admin`,
-    }
+  // 1) 초대 테이블 기록
+  const { error: inviteErr } = await supabase.from("admin_invites").upsert(
+    { email: newAdminEmail.value, status: "pending" },
+    { onConflict: "email" }
   );
 
-  if (error) {
-    message.value = "❌ 실패: " + error.message;
-    return;
-  }
-
-  // ✅ 초대 테이블 기록
-  const { error: inviteErr } = await supabase.from("admin_invites").upsert({
-    email: newAdminEmail.value,
-    status: "pending",
-  });
-
   if (inviteErr) {
+    loading.value = false;
     message.value = "❌ 초대 기록 실패: " + inviteErr.message;
     return;
   }
 
-  message.value = "✅ 초대 메일 발송 완료 (비밀번호 설정 후 로그인)";
+  // 2) 매직링크 발송
+  const SITE_URL = import.meta.env.VITE_PUBLIC_SITE_URL || window.location.origin;
+
+  const { error: otpErr } = await supabase.auth.signInWithOtp({
+    email: newAdminEmail.value,
+    options: { emailRedirectTo: `${SITE_URL}/admin` },
+  });
+
+  loading.value = false;
+
+  if (otpErr) {
+    message.value = "❌ 초대 메일 발송 실패: " + otpErr.message;
+    return;
+  }
+
+  message.value = "✅ 초대 메일 발송 완료 (메일 링크로 로그인하면 자동 등록됩니다)";
   newAdminEmail.value = "";
 }
 </script>
 
 <style scoped>
-/* (스타일은 네 거 그대로 두면 됨) */
 .admin-container {
   width: 100vw;
   height: 100dvh;
@@ -402,9 +466,24 @@ select {
   cursor: pointer;
 }
 
-.main-btn:disabled {
+.sub-btn {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.main-btn:disabled,
+.sub-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.hint {
+  font-size: 12px;
+  color: #666;
 }
 
 .message {
