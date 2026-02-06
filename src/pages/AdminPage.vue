@@ -171,7 +171,7 @@ async function login() {
     return;
   }
 
-  // ✅ 항상 서버에서 유저를 다시 가져와서 확정
+  // ✅ 서버에서 유저 재조회 (안정)
   const { data: userRes, error: userErr } = await supabase.auth.getUser();
   const loginUser = userRes?.user;
 
@@ -181,13 +181,33 @@ async function login() {
     return;
   }
 
+  // ✅ 이메일 인증 체크
   if (!loginUser.email_confirmed_at) {
     message.value = "❌ 이메일 인증 후 로그인 가능합니다.";
     await supabase.auth.signOut();
     return;
   }
 
-  // ✅ 초대 여부 확인
+  // ✅ 1) 이미 admin_users에 있으면 (슈퍼관리자/기존 관리자) 바로 통과
+  const { data: alreadyAdmin, error: adminCheckErr } = await supabase
+    .from("admin_users")
+    .select("email")
+    .eq("email", loginUser.email)
+    .maybeSingle();
+
+  if (adminCheckErr) {
+    message.value = "❌ 관리자 확인 실패: " + adminCheckErr.message;
+    await supabase.auth.signOut();
+    return;
+  }
+
+  if (alreadyAdmin) {
+    user.value = loginUser;
+    message.value = "✅ 로그인 성공";
+    return;
+  }
+
+  // ✅ 2) admin_users에 없으면: 초대 여부 확인
   const { data: inviteData, error: inviteErr } = await supabase
     .from("admin_invites")
     .select("email, status")
@@ -206,26 +226,13 @@ async function login() {
     return;
   }
 
-  // ✅ admin_users 등록
+  // ✅ 3) 초대된 사람이면 admin_users에 등록
   const { error: upsertErr } = await supabase
     .from("admin_users")
     .upsert({ email: loginUser.email }, { onConflict: "email" });
 
   if (upsertErr) {
     message.value = "❌ 관리자 등록 실패: " + upsertErr.message;
-    await supabase.auth.signOut();
-    return;
-  }
-
-  // ✅ 최종 확인
-  const { data: adminData, error: adminErr } = await supabase
-    .from("admin_users")
-    .select("email")
-    .eq("email", loginUser.email)
-    .maybeSingle();
-
-  if (adminErr || !adminData) {
-    message.value = "❌ 관리자만 접근 가능합니다.";
     await supabase.auth.signOut();
     return;
   }
