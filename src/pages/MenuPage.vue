@@ -176,7 +176,7 @@ function endTouch() {
 
 /* ✅ 새로고침 버튼 */
 function refreshButton() {
-  window.location.reload();
+  version.value = Date.now();
 }
 </script>
 
