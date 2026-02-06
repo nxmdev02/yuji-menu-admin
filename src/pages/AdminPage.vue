@@ -40,10 +40,6 @@
 
         <input type="file" @change="handleFile" />
 
-        <button class="sub-btn" type="button" @click="refreshPreview" :disabled="loading">
-          이미지 새로고침
-        </button>
-
         <button class="main-btn" @click="uploadMenu" :disabled="!file || loading">
           {{ loading ? "업로드 중..." : "메뉴 교체" }}
         </button>
@@ -196,7 +192,8 @@ async function uploadMenu() {
     return;
   }
 
-  message.value = "✅ 업로드 성공! (이미지 새로고침 버튼을 누르면 최신으로 보입니다)";
+  message.value = "✅ 업로드 성공";
+  refreshPreview()
   file.value = null;
 }
 </script>
