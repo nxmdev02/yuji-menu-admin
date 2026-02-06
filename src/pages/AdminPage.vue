@@ -292,35 +292,33 @@ async function addAdmin() {
 
   message.value = "초대 메일 발송 중...";
 
-  const tempPassword = Math.random().toString(36).slice(2) + "A1!";
-
   const SITE_URL = import.meta.env.VITE_PUBLIC_SITE_URL || window.location.origin;
 
-  const { error } = await supabase.auth.signUp({
-    email: newAdminEmail.value,
-    password: tempPassword,
-    options: {
-      emailRedirectTo: `${SITE_URL}/admin`, // ✅ 배포/로컬 자동
-    },
-  });
+  // 🔥 비밀번호 설정 메일 발송
+  const { error } = await supabase.auth.resetPasswordForEmail(
+    newAdminEmail.value,
+    {
+      redirectTo: `${SITE_URL}/admin`,
+    }
+  );
 
   if (error) {
     message.value = "❌ 실패: " + error.message;
     return;
   }
 
-  // ✅ 초대 테이블 기록 (에러 처리 필수)
-  const { error: inviteUpsertErr } = await supabase.from("admin_invites").upsert({
+  // ✅ 초대 테이블 기록
+  const { error: inviteErr } = await supabase.from("admin_invites").upsert({
     email: newAdminEmail.value,
     status: "pending",
   });
 
-  if (inviteUpsertErr) {
-    message.value = "❌ 초대 기록 실패: " + inviteUpsertErr.message;
+  if (inviteErr) {
+    message.value = "❌ 초대 기록 실패: " + inviteErr.message;
     return;
   }
 
-  message.value = "✅ 초대 메일 발송 완료 (인증 후 관리자 자동 등록)";
+  message.value = "✅ 초대 메일 발송 완료 (비밀번호 설정 후 로그인)";
   newAdminEmail.value = "";
 }
 </script>
