@@ -108,7 +108,7 @@
             @click="uploadMenu"
             :disabled="!file || loading"
           >
-            {{ loading ? "업로드 중..." : "메뉴 교체 업로드" }}
+            {{ loading ? "업로드 중..." : "메뉴 변경" }}
           </button>
         </div>
 
@@ -241,7 +241,6 @@ async function handleAuthedSession(session) {
     }
 
     user.value = u;
-    message.value = "✅ 로그인 성공";
 
     // 로그인 후 메뉴 프리뷰 준비
     await refreshMenuPreview(false);
