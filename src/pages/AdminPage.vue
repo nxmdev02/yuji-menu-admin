@@ -2,38 +2,53 @@
   <div class="admin-container">
 
     <div class="admin-card">
-      <!-- ✅ 헤더 -->
       <div class="header">
         <h2>유지커피웍스 관리자</h2>
       </div>
 
-      <!-- ✅ 로그인 (매직링크) -->
+      <!-- ✅ 로그인 영역 -->
       <div v-if="!user" class="form-box">
-        <input v-model="email" placeholder="이메일" />
+        <input v-model.trim="email" placeholder="이메일" autocomplete="email" />
 
-        <button class="main-btn" @click="sendMagicLink" :disabled="loading">
-          {{ loading ? "발송 중..." : "로그인 링크 보내기" }}
-        </button>
+        <!-- ✅ 슈퍼관리자만 비번 입력 노출 -->
+        <template v-if="isSuperEmail">
+          <input
+            v-model="password"
+            type="password"
+            placeholder="비밀번호"
+            autocomplete="current-password"
+          />
 
-        <p class="hint">메일함에서 로그인 링크를 누르면 자동 로그인됩니다.</p>
+          <button class="main-btn" @click="loginSuperAdmin" :disabled="loading">
+            {{ loading ? "로그인 중..." : "슈퍼관리자 로그인" }}
+          </button>
+
+          <p class="hint">슈퍼관리자는 비밀번호로 로그인합니다.</p>
+        </template>
+
+        <!-- ✅ 일반 관리자: 매직링크 -->
+        <template v-else>
+          <button class="main-btn" @click="sendMagicLink" :disabled="loading">
+            {{ loading ? "발송 중..." : "로그인 링크 보내기" }}
+          </button>
+
+          <p class="hint">메일함에서 로그인 링크를 누르면 자동 로그인됩니다.</p>
+        </template>
       </div>
 
       <!-- ✅ 로그인 후 -->
       <div v-else>
-        <!-- ✅ 탭 버튼 -->
         <div class="tabs">
           <button :class="{ active: activeTab === 'menu' }" @click="activeTab = 'menu'">
             메뉴 관리
           </button>
-
           <button :class="{ active: activeTab === 'admin' }" @click="activeTab = 'admin'">
             관리자 관리
           </button>
         </div>
 
-        <!-- ✅ 메뉴 관리 탭 -->
+        <!-- ✅ 메뉴 관리 -->
         <div v-if="activeTab === 'menu'" class="form-box">
-          <!-- 언어 선택 -->
           <select v-model="selectedLang">
             <option value="korean">🇰🇷 한국어</option>
             <option value="english">🇺🇸 영어</option>
@@ -41,13 +56,11 @@
             <option value="chinese">🇨🇳 중국어</option>
           </select>
 
-          <!-- 파일명 표시 -->
           <p class="file-info">
             파일명:
             <b>{{ uploadFileName }}</b>
           </p>
 
-          <!-- ✅ 현재 노출되는 메뉴 이미지 (새로고침 버튼 때만 캐시 버스트) -->
           <div style="text-align:center;">
             <img
               v-if="menuPreviewUrl"
@@ -62,32 +75,36 @@
             이미지 새로고침
           </button>
 
-          <!-- 파일 선택 -->
           <input type="file" @change="handleFile" />
 
-          <!-- 업로드 버튼 -->
           <button class="main-btn" @click="uploadMenu" :disabled="!file || loading">
             {{ loading ? "업로드 중..." : "메뉴 교체 업로드" }}
           </button>
         </div>
 
-        <!-- ✅ 관리자 관리 탭 -->
+        <!-- ✅ 관리자 관리 -->
         <div v-if="activeTab === 'admin'" class="form-box">
           <p class="hint" v-if="isSuperAdmin">슈퍼관리자 전용: 관리자 이메일 초대</p>
           <p class="hint" v-else>슈퍼관리자만 관리자 추가가 가능합니다.</p>
 
-          <input v-model="newAdminEmail" placeholder="추가할 관리자 이메일" :disabled="!isSuperAdmin" />
+          <input
+            v-model.trim="newAdminEmail"
+            placeholder="추가할 관리자 이메일"
+            :disabled="!isSuperAdmin"
+          />
 
-          <button class="main-btn" @click="addAdmin" :disabled="!isSuperAdmin || !newAdminEmail || loading">
+          <button
+            class="main-btn"
+            @click="addAdmin"
+            :disabled="!isSuperAdmin || !newAdminEmail || loading"
+          >
             {{ loading ? "초대 중..." : "관리자 추가(초대 메일)" }}
           </button>
         </div>
       </div>
 
-      <!-- ✅ 메시지 -->
       <p class="message">{{ message }}</p>
 
-      <!-- ✅ 하단 액션 -->
       <div v-if="user" class="bottom-actions">
         <router-link to="/" class="back-link">메뉴로 돌아가기</router-link>
         <button class="logout-btn" @click="logout" :disabled="loading">로그아웃</button>
@@ -97,7 +114,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { supabase } from "@/lib/supabase";
 
 /* ------------------------------
@@ -106,17 +123,22 @@ import { supabase } from "@/lib/supabase";
 const SUPER_ADMIN_EMAIL = "nxmdev02@gmail.com";
 
 const email = ref("");
+const password = ref(""); // ✅ 슈퍼관리자용
 const user = ref(null);
 const message = ref("");
 const loading = ref(false);
 
 const activeTab = ref("menu");
 
+/* ✅ 이메일 입력값이 슈퍼관리자인지 */
+const isSuperEmail = computed(() => (email.value || "").toLowerCase() === SUPER_ADMIN_EMAIL);
+
+/* ✅ 로그인 된 유저가 슈퍼관리자인지 */
+const isSuperAdmin = computed(() => user.value?.email === SUPER_ADMIN_EMAIL);
+
 /* ------------------------------
    ✅ 권한 helper
 ------------------------------ */
-const isSuperAdmin = computed(() => user.value?.email === SUPER_ADMIN_EMAIL);
-
 async function ensureAdminAccess(currentUser) {
   // 0) 슈퍼관리자면 무조건 통과 + admin_users 보장
   if (currentUser.email === SUPER_ADMIN_EMAIL) {
@@ -160,7 +182,7 @@ async function ensureAdminAccess(currentUser) {
 }
 
 /* ------------------------------
-   ✅ 세션 복구 + Auth 구독 (로그인 시 권한검증 포함)
+   ✅ 세션 복구 + Auth 구독
 ------------------------------ */
 let authSub;
 
@@ -184,15 +206,13 @@ async function handleAuthedSession(session) {
 
     user.value = u;
     message.value = "✅ 로그인 성공";
-
-    // 로그인 후 메뉴 프리뷰 갱신(캐시 그대로: 기본은 v=0)
     await refreshMenuPreview(false);
 
-    // URL hash 토큰 제거(깔끔하게)
+    // URL hash 토큰 제거
     if (window.location.hash) {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-  } catch (e) {
+  } catch {
     message.value = "❌ 권한 확인 실패";
     await supabase.auth.signOut();
     user.value = null;
@@ -213,13 +233,55 @@ onMounted(async () => {
 onUnmounted(() => authSub?.unsubscribe());
 
 /* ------------------------------
-   ✅ 매직링크 로그인
+   ✅ 슈퍼관리자 비밀번호 로그인
+------------------------------ */
+async function loginSuperAdmin() {
+  message.value = "";
+
+  if (!email.value) {
+    message.value = "❌ 이메일 입력하세요.";
+    return;
+  }
+  if (!isSuperEmail.value) {
+    message.value = "❌ 슈퍼관리자 이메일이 아닙니다.";
+    return;
+  }
+  if (!password.value) {
+    message.value = "❌ 비밀번호 입력하세요.";
+    return;
+  }
+
+  loading.value = true;
+
+  const { error } = await supabase.auth.signInWithPassword({
+    email: email.value,
+    password: password.value,
+  });
+
+  loading.value = false;
+
+  if (error) {
+    message.value = "❌ 로그인 실패: " + error.message;
+    return;
+  }
+
+  // 세션 처리는 onAuthStateChange -> handleAuthedSession에서 마무리됨
+}
+
+/* ------------------------------
+   ✅ 일반 관리자: 매직링크 로그인
 ------------------------------ */
 async function sendMagicLink() {
   message.value = "";
 
   if (!email.value) {
     message.value = "❌ 이메일 입력하세요.";
+    return;
+  }
+
+  // 슈퍼관리자 메일이면 매직링크 막기 (rate limit 방지 + 정책)
+  if (isSuperEmail.value) {
+    message.value = "❌ 슈퍼관리자는 비밀번호로 로그인하세요.";
     return;
   }
 
@@ -254,6 +316,7 @@ async function logout() {
 
   user.value = null;
   message.value = "로그아웃되었습니다.";
+  password.value = "";
 }
 
 /* ------------------------------
@@ -275,7 +338,6 @@ function handleFile(e) {
   file.value = e.target.files?.[0] || null;
 }
 
-// 프리뷰 URL + 버전(기본 0, 새로고침 버튼 눌렀을 때만 갱신)
 const previewVersion = ref(0);
 const menuPreviewUrl = ref("");
 
@@ -288,14 +350,13 @@ async function refreshMenuPreview(bust = false) {
   menuPreviewUrl.value = publicUrl ? `${publicUrl}?v=${previewVersion.value}` : "";
 }
 
-// 언어 바꾸면 "같은 v"로만 갱신(캐시 버스트는 새로고침 버튼에서만)
-async function onChangeLang() {
-  await refreshMenuPreview(false);
-}
-
 async function refreshPreview() {
   await refreshMenuPreview(true);
 }
+
+watch(selectedLang, async () => {
+  await refreshMenuPreview(false);
+});
 
 async function uploadMenu() {
   if (!file.value) return;
@@ -324,26 +385,13 @@ async function uploadMenu() {
   file.value = null;
 }
 
-/* selectedLang 변화 감지: watch 없이도 간단히 */
-const _origSetter = selectedLang.value;
-Object.defineProperty(selectedLang, "value", {
-  get() {
-    return _origSetter;
-  },
-  set(v) {
-    // eslint-disable-next-line no-param-reassign
-    selectedLang._value = v;
-    onChangeLang();
-  },
-});
-
 /* ------------------------------
-   ✅ 관리자 추가(초대): 슈퍼관리자만
+   ✅ 관리자 추가(초대): 슈퍼관리자만 (매직링크 발송)
 ------------------------------ */
 const newAdminEmail = ref("");
 
 async function addAdmin() {
-  if (!user.value?.email || user.value.email !== SUPER_ADMIN_EMAIL) {
+  if (!isSuperAdmin.value) {
     message.value = "❌ 슈퍼관리자만 관리자 추가가 가능합니다.";
     return;
   }
@@ -406,7 +454,6 @@ async function addAdmin() {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
 }
 
-/* 헤더 */
 .header {
   margin-bottom: 50px;
 }
@@ -416,7 +463,6 @@ h2 {
   font-weight: 700;
 }
 
-/* 탭 */
 .tabs {
   display: flex;
   gap: 8px;
@@ -438,7 +484,6 @@ h2 {
   color: white;
 }
 
-/* 폼 */
 .form-box {
   display: flex;
   flex-direction: column;
@@ -492,7 +537,6 @@ select {
   color: #444;
 }
 
-/* 하단 액션 */
 .bottom-actions {
   margin-top: 25px;
   display: flex;
