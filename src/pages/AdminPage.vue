@@ -2,53 +2,70 @@
   <div class="admin-container">
 
     <div class="admin-card">
+      <!-- ✅ 헤더 -->
       <div class="header">
         <h2>유지커피웍스 관리자</h2>
       </div>
 
-      <!-- ✅ 로그인 영역 -->
+      <!-- ✅ 로그인: 슈퍼관리자=비번로그인, 그 외=매직링크 -->
       <div v-if="!user" class="form-box">
-        <input v-model.trim="email" placeholder="이메일" autocomplete="email" />
+        <input v-model="email" placeholder="이메일" />
 
         <!-- ✅ 슈퍼관리자만 비번 입력 노출 -->
-        <template v-if="isSuperEmail">
-          <input
-            v-model="password"
-            type="password"
-            placeholder="비밀번호"
-            autocomplete="current-password"
-          />
+        <input
+          v-if="isSuperAdminEmail"
+          v-model="password"
+          type="password"
+          placeholder="비밀번호"
+        />
 
-          <button class="main-btn" @click="loginSuperAdmin" :disabled="loading">
-            {{ loading ? "로그인 중..." : "슈퍼관리자 로그인" }}
-          </button>
+        <button
+          v-if="isSuperAdminEmail"
+          class="main-btn"
+          @click="loginWithPassword"
+          :disabled="loading"
+        >
+          {{ loading ? "로그인 중..." : "비밀번호로 로그인" }}
+        </button>
 
-          <p class="hint">슈퍼관리자는 비밀번호로 로그인합니다.</p>
-        </template>
+        <button
+          v-else
+          class="main-btn"
+          @click="sendMagicLink"
+          :disabled="loading"
+        >
+          {{ loading ? "발송 중..." : "로그인 링크 보내기" }}
+        </button>
 
-        <!-- ✅ 일반 관리자: 매직링크 -->
-        <template v-else>
-          <button class="main-btn" @click="sendMagicLink" :disabled="loading">
-            {{ loading ? "발송 중..." : "로그인 링크 보내기" }}
-          </button>
-
-          <p class="hint">메일함에서 로그인 링크를 누르면 자동 로그인됩니다.</p>
-        </template>
+        <p class="hint" v-if="!isSuperAdminEmail">
+          메일함에서 로그인 링크를 누르면 자동 로그인됩니다.
+        </p>
       </div>
 
       <!-- ✅ 로그인 후 -->
       <div v-else>
+        <!-- ✅ 탭 버튼 -->
         <div class="tabs">
-          <button :class="{ active: activeTab === 'menu' }" @click="activeTab = 'menu'">
+          <button
+            :class="{ active: activeTab === 'menu' }"
+            @click="activeTab = 'menu'"
+          >
             메뉴 관리
           </button>
-          <button :class="{ active: activeTab === 'admin' }" @click="activeTab = 'admin'">
+
+          <!-- ✅ 슈퍼관리자만 관리자 관리 탭 노출 -->
+          <button
+            v-if="isSuperAdmin"
+            :class="{ active: activeTab === 'admin' }"
+            @click="activeTab = 'admin'"
+          >
             관리자 관리
           </button>
         </div>
 
-        <!-- ✅ 메뉴 관리 -->
+        <!-- ✅ 메뉴 관리 탭 (초대받은 관리자도 가능) -->
         <div v-if="activeTab === 'menu'" class="form-box">
+          <!-- 언어 선택 -->
           <select v-model="selectedLang">
             <option value="korean">🇰🇷 한국어</option>
             <option value="english">🇺🇸 영어</option>
@@ -56,58 +73,68 @@
             <option value="chinese">🇨🇳 중국어</option>
           </select>
 
+          <!-- 파일명 표시 -->
           <p class="file-info">
             파일명:
             <b>{{ uploadFileName }}</b>
           </p>
 
-          <div style="text-align:center;">
+          <!-- ✅ 현재 노출되는 메뉴 이미지 (새로고침 버튼 때만 캐시 버스트) -->
+          <div style="text-align: center">
             <img
               v-if="menuPreviewUrl"
               :src="menuPreviewUrl"
               alt="menu preview"
-              style="width: 100%; border-radius: 10px; border: 1px solid #eee;"
+              style="width: 100%; border-radius: 10px; border: 1px solid #eee"
               draggable="false"
             />
           </div>
 
-          <button class="sub-btn" type="button" @click="refreshPreview" :disabled="loading">
+          <!-- 파일 선택 -->
+          <input type="file" @change="handleFile" />
+
+          <button
+            class="sub-btn"
+            type="button"
+            @click="refreshPreview"
+            :disabled="loading"
+          >
             이미지 새로고침
           </button>
 
-          <input type="file" @change="handleFile" />
-
-          <button class="main-btn" @click="uploadMenu" :disabled="!file || loading">
+          <!-- 업로드 버튼 -->
+          <button
+            class="main-btn"
+            @click="uploadMenu"
+            :disabled="!file || loading"
+          >
             {{ loading ? "업로드 중..." : "메뉴 교체 업로드" }}
           </button>
         </div>
 
-        <!-- ✅ 관리자 관리 -->
-        <div v-if="activeTab === 'admin'" class="form-box">
-          <p class="hint" v-if="isSuperAdmin">슈퍼관리자 전용: 관리자 이메일 초대</p>
-          <p class="hint" v-else>슈퍼관리자만 관리자 추가가 가능합니다.</p>
-
-          <input
-            v-model.trim="newAdminEmail"
-            placeholder="추가할 관리자 이메일"
-            :disabled="!isSuperAdmin"
-          />
+        <!-- ✅ 관리자 관리 탭 (슈퍼관리자만) -->
+        <div v-if="activeTab === 'admin' && isSuperAdmin" class="form-box">
+          <input v-model="newAdminEmail" placeholder="추가할 관리자 이메일" />
 
           <button
             class="main-btn"
             @click="addAdmin"
-            :disabled="!isSuperAdmin || !newAdminEmail || loading"
+            :disabled="!newAdminEmail || loading"
           >
             {{ loading ? "초대 중..." : "관리자 추가(초대 메일)" }}
           </button>
         </div>
       </div>
 
+      <!-- ✅ 메시지 -->
       <p class="message">{{ message }}</p>
 
+      <!-- ✅ 하단 액션 -->
       <div v-if="user" class="bottom-actions">
         <router-link to="/" class="back-link">메뉴로 돌아가기</router-link>
-        <button class="logout-btn" @click="logout" :disabled="loading">로그아웃</button>
+        <button class="logout-btn" @click="logout" :disabled="loading">
+          로그아웃
+        </button>
       </div>
     </div>
   </div>
@@ -123,21 +150,30 @@ import { supabase } from "@/lib/supabase";
 const SUPER_ADMIN_EMAIL = "nxmdev02@gmail.com";
 
 const email = ref("");
-const password = ref(""); // ✅ 슈퍼관리자용
+const password = ref("");
 const user = ref(null);
 const message = ref("");
 const loading = ref(false);
 
 const activeTab = ref("menu");
 
-/* ✅ 이메일 입력값이 슈퍼관리자인지 */
-const isSuperEmail = computed(() => (email.value || "").toLowerCase() === SUPER_ADMIN_EMAIL);
-
-/* ✅ 로그인 된 유저가 슈퍼관리자인지 */
-const isSuperAdmin = computed(() => user.value?.email === SUPER_ADMIN_EMAIL);
+/* ------------------------------
+   ✅ 이메일이 슈퍼관리자인지(로그인 전에도 판단)
+------------------------------ */
+const isSuperAdminEmail = computed(() => (email.value || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL);
 
 /* ------------------------------
-   ✅ 권한 helper
+   ✅ 로그인 후 슈퍼관리자 여부
+------------------------------ */
+const isSuperAdmin = computed(() => user.value?.email === SUPER_ADMIN_EMAIL);
+
+/* ✅ 슈퍼관리자 아니면 admin 탭 강제 차단 */
+watch(isSuperAdmin, (v) => {
+  if (!v && activeTab.value === "admin") activeTab.value = "menu";
+});
+
+/* ------------------------------
+   ✅ 권한 확인: admin_users 있거나(초대수락), 슈퍼관리자면 통과
 ------------------------------ */
 async function ensureAdminAccess(currentUser) {
   // 0) 슈퍼관리자면 무조건 통과 + admin_users 보장
@@ -156,7 +192,7 @@ async function ensureAdminAccess(currentUser) {
   if (adminErr) throw adminErr;
   if (adminRow) return true;
 
-  // 2) admin_users 없으면: 초대 상태 확인
+  // 2) admin_users 없으면: 초대 상태 확인 (pending/accepted면 자동 등록)
   const { data: inviteRow, error: inviteErr } = await supabase
     .from("admin_invites")
     .select("email, status")
@@ -182,7 +218,7 @@ async function ensureAdminAccess(currentUser) {
 }
 
 /* ------------------------------
-   ✅ 세션 복구 + Auth 구독
+   ✅ 세션 복구 + Auth 구독 (로그인 시 권한검증 포함)
 ------------------------------ */
 let authSub;
 
@@ -206,13 +242,15 @@ async function handleAuthedSession(session) {
 
     user.value = u;
     message.value = "✅ 로그인 성공";
+
+    // 로그인 후 메뉴 프리뷰 준비
     await refreshMenuPreview(false);
 
-    // URL hash 토큰 제거
+    // URL hash 토큰 제거(깔끔하게)
     if (window.location.hash) {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
-  } catch {
+  } catch (_e) {
     message.value = "❌ 권한 확인 실패";
     await supabase.auth.signOut();
     user.value = null;
@@ -233,21 +271,13 @@ onMounted(async () => {
 onUnmounted(() => authSub?.unsubscribe());
 
 /* ------------------------------
-   ✅ 슈퍼관리자 비밀번호 로그인
+   ✅ 로그인: 슈퍼관리자 비번로그인
 ------------------------------ */
-async function loginSuperAdmin() {
+async function loginWithPassword() {
   message.value = "";
 
-  if (!email.value) {
-    message.value = "❌ 이메일 입력하세요.";
-    return;
-  }
-  if (!isSuperEmail.value) {
-    message.value = "❌ 슈퍼관리자 이메일이 아닙니다.";
-    return;
-  }
-  if (!password.value) {
-    message.value = "❌ 비밀번호 입력하세요.";
+  if (!email.value || !password.value) {
+    message.value = "❌ 이메일/비밀번호를 입력하세요.";
     return;
   }
 
@@ -265,23 +295,17 @@ async function loginSuperAdmin() {
     return;
   }
 
-  // 세션 처리는 onAuthStateChange -> handleAuthedSession에서 마무리됨
+  // 세션 처리는 onAuthStateChange에서 이어짐
 }
 
 /* ------------------------------
-   ✅ 일반 관리자: 매직링크 로그인
+   ✅ 로그인: 매직링크(초대 받은 사람)
 ------------------------------ */
 async function sendMagicLink() {
   message.value = "";
 
   if (!email.value) {
     message.value = "❌ 이메일 입력하세요.";
-    return;
-  }
-
-  // 슈퍼관리자 메일이면 매직링크 막기 (rate limit 방지 + 정책)
-  if (isSuperEmail.value) {
-    message.value = "❌ 슈퍼관리자는 비밀번호로 로그인하세요.";
     return;
   }
 
@@ -316,7 +340,6 @@ async function logout() {
 
   user.value = null;
   message.value = "로그아웃되었습니다.";
-  password.value = "";
 }
 
 /* ------------------------------
@@ -338,6 +361,7 @@ function handleFile(e) {
   file.value = e.target.files?.[0] || null;
 }
 
+// 프리뷰 URL + 버전(기본 0, 새로고침 버튼 눌렀을 때만 갱신)
 const previewVersion = ref(0);
 const menuPreviewUrl = ref("");
 
@@ -350,13 +374,14 @@ async function refreshMenuPreview(bust = false) {
   menuPreviewUrl.value = publicUrl ? `${publicUrl}?v=${previewVersion.value}` : "";
 }
 
+watch(selectedLang, async () => {
+  // 언어 변경 시에는 캐시 버스트 없이 URL만 갱신
+  await refreshMenuPreview(false);
+});
+
 async function refreshPreview() {
   await refreshMenuPreview(true);
 }
-
-watch(selectedLang, async () => {
-  await refreshMenuPreview(false);
-});
 
 async function uploadMenu() {
   if (!file.value) return;
@@ -386,7 +411,7 @@ async function uploadMenu() {
 }
 
 /* ------------------------------
-   ✅ 관리자 추가(초대): 슈퍼관리자만 (매직링크 발송)
+   ✅ 관리자 추가(초대): 슈퍼관리자만
 ------------------------------ */
 const newAdminEmail = ref("");
 
@@ -416,7 +441,7 @@ async function addAdmin() {
     return;
   }
 
-  // 2) 매직링크 발송
+  // 2) 매직링크 발송 (초대받은 사람은 이 링크로 로그인)
   const SITE_URL = import.meta.env.VITE_PUBLIC_SITE_URL || window.location.origin;
 
   const { error: otpErr } = await supabase.auth.signInWithOtp({
@@ -431,7 +456,7 @@ async function addAdmin() {
     return;
   }
 
-  message.value = "✅ 초대 메일 발송 완료 (메일 링크로 로그인하면 자동 등록됩니다)";
+  message.value = "✅ 초대 메일 발송 완료 (메일 링크로 로그인하면 메뉴 관리가 가능합니다)";
   newAdminEmail.value = "";
 }
 </script>
@@ -454,6 +479,7 @@ async function addAdmin() {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
 }
 
+/* 헤더 */
 .header {
   margin-bottom: 50px;
 }
@@ -463,6 +489,7 @@ h2 {
   font-weight: 700;
 }
 
+/* 탭 */
 .tabs {
   display: flex;
   gap: 8px;
@@ -484,6 +511,7 @@ h2 {
   color: white;
 }
 
+/* 폼 */
 .form-box {
   display: flex;
   flex-direction: column;
@@ -537,6 +565,7 @@ select {
   color: #444;
 }
 
+/* 하단 액션 */
 .bottom-actions {
   margin-top: 25px;
   display: flex;
