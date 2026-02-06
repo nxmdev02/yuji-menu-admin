@@ -171,16 +171,23 @@ async function login() {
     return;
   }
 
-  const loginUser = data.user;
+  // ✅ 항상 서버에서 유저를 다시 가져와서 확정
+  const { data: userRes, error: userErr } = await supabase.auth.getUser();
+  const loginUser = userRes?.user;
 
-  /* ✅ 이메일 인증 체크 */
+  if (userErr || !loginUser) {
+    message.value = "❌ 유저 정보 조회 실패";
+    await supabase.auth.signOut();
+    return;
+  }
+
   if (!loginUser.email_confirmed_at) {
     message.value = "❌ 이메일 인증 후 로그인 가능합니다.";
     await supabase.auth.signOut();
     return;
   }
 
-  /* ✅ 초대 여부 확인 (admin_invites에 있어야만) */
+  // ✅ 초대 여부 확인
   const { data: inviteData, error: inviteErr } = await supabase
     .from("admin_invites")
     .select("email, status")
@@ -193,14 +200,13 @@ async function login() {
     return;
   }
 
-  // 초대가 없거나 취소(revoked)면 거부
   if (!inviteData || inviteData.status === "revoked") {
     message.value = "❌ 관리자 초대된 계정만 접근 가능합니다.";
     await supabase.auth.signOut();
     return;
   }
 
-  /* ✅ 초대된 사람이라면 관리자 테이블에 등록 */
+  // ✅ admin_users 등록
   const { error: upsertErr } = await supabase
     .from("admin_users")
     .upsert({ email: loginUser.email }, { onConflict: "email" });
@@ -211,20 +217,14 @@ async function login() {
     return;
   }
 
-  /* ✅ 관리자 체크 (최종) */
+  // ✅ 최종 확인
   const { data: adminData, error: adminErr } = await supabase
     .from("admin_users")
     .select("email")
     .eq("email", loginUser.email)
     .maybeSingle();
 
-  if (adminErr) {
-    message.value = "❌ 관리자 확인 실패: " + adminErr.message;
-    await supabase.auth.signOut();
-    return;
-  }
-
-  if (!adminData) {
+  if (adminErr || !adminData) {
     message.value = "❌ 관리자만 접근 가능합니다.";
     await supabase.auth.signOut();
     return;
@@ -275,10 +275,6 @@ async function uploadMenu() {
    ✅ 관리자 추가
 ------------------------------ */
 const newAdminEmail = ref("");
-
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
 
 async function addAdmin() {
   if (!newAdminEmail.value) {
